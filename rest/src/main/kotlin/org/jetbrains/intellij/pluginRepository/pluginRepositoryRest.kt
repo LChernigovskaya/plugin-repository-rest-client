@@ -69,6 +69,28 @@ data class PluginBean(
     val depends: List<String>
 )
 
+interface PluginRepository {
+    fun uploadPlugin(pluginId: Int, file: File, channel: String? = null)
+
+    fun uploadPlugin(pluginXmlId: String, file: File, channel: String? = null)
+
+    fun download(
+        pluginXmlId: String,
+        version: String,
+        channel: String? = null,
+        targetPath: String
+    ): File?
+
+    fun downloadCompatiblePlugin(
+        pluginXmlId: String,
+        ideBuild: String,
+        channel: String? = null,
+        targetPath: String
+    ): File?
+
+    fun listPlugins(ideBuild: String, channel: String?, pluginId: String?): List<PluginBean>
+}
+
 /**
  * @author nik
  */
@@ -77,7 +99,7 @@ class PluginRepositoryInstance private constructor(
     private val token: String?,
     username: String?,
     password: String?
-) {
+) : PluginRepository {
     @Deprecated("Use hub permanent tokens to authorize your requests")
     constructor(siteUrl: String, username: String?, password: String?) : this(siteUrl, null, username, password)
 
@@ -109,11 +131,11 @@ class PluginRepositoryInstance private constructor(
         .build()
         .create(PluginRepositoryService::class.java)
 
-    fun uploadPlugin(pluginId: Int, file: File, channel: String? = null) {
+    override fun uploadPlugin(pluginId: Int, file: File, channel: String?) {
         uploadPluginInternal(file, pluginId = pluginId, channel = channel)
     }
 
-    fun uploadPlugin(pluginXmlId: String, file: File, channel: String? = null) {
+    override fun uploadPlugin(pluginXmlId: String, file: File, channel: String?) {
         uploadPluginInternal(file, pluginXmlId = pluginXmlId, channel = channel)
     }
 
@@ -159,7 +181,7 @@ class PluginRepositoryInstance private constructor(
         if (password == null) throw RuntimeException("Password must be set for uploading")
     }
 
-    fun download(pluginXmlId: String, version: String, channel: String? = null, targetPath: String): File? {
+    override fun download(pluginXmlId: String, version: String, channel: String?, targetPath: String): File? {
         LOG.info("Downloading $pluginXmlId:$version")
         return try {
             downloadFile(service.download(pluginXmlId, version, channel), targetPath)
@@ -169,10 +191,10 @@ class PluginRepositoryInstance private constructor(
         }
     }
 
-    fun downloadCompatiblePlugin(
+    override fun downloadCompatiblePlugin(
         pluginXmlId: String,
         ideBuild: String,
-        channel: String? = null,
+        channel: String?,
         targetPath: String
     ): File? {
         LOG.info("Downloading $pluginXmlId for $ideBuild build")
@@ -237,7 +259,7 @@ class PluginRepositoryInstance private constructor(
             .removeSurrounding("\"")
     }
 
-    fun listPlugins(ideBuild: String, channel: String?, pluginId: String?): List<PluginBean> {
+    override fun listPlugins(ideBuild: String, channel: String?, pluginId: String?): List<PluginBean> {
         val response = service.listPlugins(ideBuild, channel, pluginId)
         return response.categories?.flatMap { convertCategory(it) } ?: emptyList()
     }
