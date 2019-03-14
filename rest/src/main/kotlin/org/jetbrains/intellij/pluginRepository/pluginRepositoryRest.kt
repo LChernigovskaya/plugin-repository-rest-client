@@ -78,20 +78,18 @@ class PluginRepositoryInstance private constructor(
 
     private val service = RestAdapter.Builder()
             .setEndpoint(siteUrl)
-            .setClient({ ->
-                object : UrlConnectionClient() {
-                    override fun openConnection(request: Request?): HttpURLConnection {
-                        val connection = super.openConnection(request)
-                        val timeout = 10 * 60 * 1000
-                        connection.readTimeout = timeout
-                        return connection
-                    }
+            .setClient(object : UrlConnectionClient() {
+                override fun openConnection(request: Request?): HttpURLConnection {
+                    val connection = super.openConnection(request)
+                    val timeout = 10 * 60 * 1000
+                    connection.readTimeout = timeout
+                    return connection
                 }
             })
-            .setRequestInterceptor({ request ->
+            .setRequestInterceptor { request ->
                 if (token != null) request.addHeader("Authorization", "Bearer $token")
-            })
-            .setLog({ LOG.debug(it) })
+            }
+            .setLog { LOG.debug(it) }
             .setLogLevel(RestAdapter.LogLevel.BASIC)
             .setConverter(SimpleXMLConverter())
             .build()
@@ -137,7 +135,7 @@ class PluginRepositoryInstance private constructor(
         return try {
             downloadFile(service.download(pluginXmlId, version, channel), targetPath)
         } catch (e: RetrofitError) {
-            processRetofitError(e, "Cannot find $pluginXmlId:$version", "Can't download plugin")
+            processRetrofitError(e, "Cannot find $pluginXmlId:$version", "Can't download plugin")
             null
         }
     }
@@ -148,12 +146,12 @@ class PluginRepositoryInstance private constructor(
         return try {
             downloadFile(service.downloadCompatiblePlugin(pluginXmlId, ideBuild, channel), targetPath)
         } catch (e: RetrofitError) {
-            processRetofitError(e, "Cannot find $pluginXmlId compatible with $ideBuild build", "Can't download plugin")
+            processRetrofitError(e, "Cannot find $pluginXmlId compatible with $ideBuild build", "Can't download plugin")
             null
         }
     }
 
-    private fun processRetofitError(e: RetrofitError, notFoundErrorMessage: String, baseErrorMessage: String) {
+    private fun processRetrofitError(e: RetrofitError, notFoundErrorMessage: String, baseErrorMessage: String) {
         //see `retrofit.RetrofitError.Kind.UNEXPECTED` doc
         if (e.kind == RetrofitError.Kind.UNEXPECTED) throw e.cause!!
         val response = e.response
