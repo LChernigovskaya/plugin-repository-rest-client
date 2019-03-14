@@ -21,48 +21,62 @@ import java.net.HttpURLConnection
 
 @Root(strict = false)
 private data class RestPluginRepositoryBean(
-        @field:ElementList(entry = "category", inline = true, required = false) var categories: List<RestCategoryBean>? = null
+    @field:ElementList(entry = "category", inline = true, required = false)
+    var categories: List<RestCategoryBean>? = null
 )
 
 @Root(strict = false)
 private data class RestCategoryBean(
-        @field:Attribute var name: String? = null,
-        @field:ElementList(entry = "idea-plugin", inline = true) var plugins: List<RestPluginBean>? = null
+    @field:Attribute
+    var name: String? = null,
+
+    @field:ElementList(entry = "idea-plugin", inline = true)
+    var plugins: List<RestPluginBean>? = null
 )
 
 @Root(strict = false)
 private data class RestPluginBean(
-        @param:Element(name = "name") @field:Element val name: String,
-        @param:Element(name = "id") @field:Element val id: String,
-        @param:Element(name = "version") @field:Element val version: String,
-        @param:Element(name = "idea-version") @field:Element(name = "idea-version") val ideaVersion: RestIdeaVersionBean,
-        @param:ElementList(entry = "depends", inline = true, required = false) @field:ElementList(entry = "depends", inline = true, required = false) val depends: List<String>? = null
+    @param:Element(name = "name") @field:Element
+    val name: String,
+
+    @param:Element(name = "id") @field:Element
+    val id: String,
+
+    @param:Element(name = "version") @field:Element
+    val version: String,
+
+    @param:Element(name = "idea-version") @field:Element(name = "idea-version")
+    val ideaVersion: RestIdeaVersionBean,
+
+    @param:ElementList(entry = "depends", inline = true, required = false)
+    @field:ElementList(entry = "depends", inline = true, required = false)
+    val depends: List<String>? = null
 )
 
 @Root(strict = false)
 private data class RestIdeaVersionBean(
-        @field:Attribute(name = "since-build", required = false) var sinceBuild: String? = null,
-        @field:Attribute(name = "until-build", required = false) var untilBuild: String? = null
+    @field:Attribute(name = "since-build", required = false) var sinceBuild: String? = null,
+    @field:Attribute(name = "until-build", required = false) var untilBuild: String? = null
 )
 
 data class PluginBean(
-        val name: String,
-        val id: String,
-        val version: String,
-        val category: String,
-        val sinceBuild: String?,
-        val untilBuild: String?,
-        val depends: List<String>
+    val name: String,
+    val id: String,
+    val version: String,
+    val category: String,
+    val sinceBuild: String?,
+    val untilBuild: String?,
+    val depends: List<String>
 )
 
 /**
  * @author nik
  */
 class PluginRepositoryInstance private constructor(
-        private val siteUrl: String,
-        private val token: String?,
-        username: String?,
-        password: String?
+    private val siteUrl: String,
+    private val token: String?,
+    username: String?,
+    password: String?
 ) {
     @Deprecated("Use hub permanent tokens to authorize your requests")
     constructor(siteUrl: String, username: String?, password: String?) : this(siteUrl, null, username, password)
@@ -77,23 +91,23 @@ class PluginRepositoryInstance private constructor(
     private val password = if (password != null) TypedString(password) else null
 
     private val service = RestAdapter.Builder()
-            .setEndpoint(siteUrl)
-            .setClient(object : UrlConnectionClient() {
-                override fun openConnection(request: Request?): HttpURLConnection {
-                    val connection = super.openConnection(request)
-                    val timeout = 10 * 60 * 1000
-                    connection.readTimeout = timeout
-                    return connection
-                }
-            })
-            .setRequestInterceptor { request ->
-                if (token != null) request.addHeader("Authorization", "Bearer $token")
+        .setEndpoint(siteUrl)
+        .setClient(object : UrlConnectionClient() {
+            override fun openConnection(request: Request?): HttpURLConnection {
+                val connection = super.openConnection(request)
+                val timeout = 10 * 60 * 1000
+                connection.readTimeout = timeout
+                return connection
             }
-            .setLog { LOG.debug(it) }
-            .setLogLevel(RestAdapter.LogLevel.BASIC)
-            .setConverter(SimpleXMLConverter())
-            .build()
-            .create(PluginRepositoryService::class.java)
+        })
+        .setRequestInterceptor { request ->
+            if (token != null) request.addHeader("Authorization", "Bearer $token")
+        }
+        .setLog { LOG.debug(it) }
+        .setLogLevel(RestAdapter.LogLevel.BASIC)
+        .setConverter(SimpleXMLConverter())
+        .build()
+        .create(PluginRepositoryService::class.java)
 
     fun uploadPlugin(pluginId: Int, file: File, channel: String? = null) {
         uploadPluginInternal(file, pluginId = pluginId, channel = channel)
@@ -103,16 +117,31 @@ class PluginRepositoryInstance private constructor(
         uploadPluginInternal(file, pluginXmlId = pluginXmlId, channel = channel)
     }
 
-    private fun uploadPluginInternal(file: File, pluginId: Int? = null, pluginXmlId: String? = null, channel: String? = null) {
+    private fun uploadPluginInternal(
+        file: File,
+        pluginId: Int? = null,
+        pluginXmlId: String? = null,
+        channel: String? = null
+    ) {
         ensureCredentialsAreSet()
         try {
             LOG.info("Uploading plugin ${pluginXmlId ?: pluginId} from ${file.absolutePath} to $siteUrl")
             val response = if (pluginXmlId != null) {
-                service.uploadByXmlId(username, password, TypedString(pluginXmlId),
-                        channel?.let { TypedString(it) }, TypedFile("application/octet-stream", file))
+                service.uploadByXmlId(
+                    username,
+                    password,
+                    TypedString(pluginXmlId),
+                    channel?.let { TypedString(it) },
+                    TypedFile("application/octet-stream", file)
+                )
             } else {
-                service.upload(username, password, TypedString(pluginId.toString()),
-                        channel?.let { TypedString(it) }, TypedFile("application/octet-stream", file))
+                service.upload(
+                    username,
+                    password,
+                    TypedString(pluginId.toString()),
+                    channel?.let { TypedString(it) },
+                    TypedFile("application/octet-stream", file)
+                )
             }
             LOG.info("Done: " + response.text)
         } catch (e: RetrofitError) {
@@ -140,8 +169,12 @@ class PluginRepositoryInstance private constructor(
         }
     }
 
-    fun downloadCompatiblePlugin(pluginXmlId: String, ideBuild: String, channel: String? = null,
-                                 targetPath: String): File? {
+    fun downloadCompatiblePlugin(
+        pluginXmlId: String,
+        ideBuild: String,
+        channel: String? = null,
+        targetPath: String
+    ): File? {
         LOG.info("Downloading $pluginXmlId for $ideBuild build")
         return try {
             downloadFile(service.downloadCompatiblePlugin(pluginXmlId, ideBuild, channel), targetPath)
@@ -199,9 +232,9 @@ class PluginRepositoryInstance private constructor(
             return if (fileName.isNotEmpty()) fileName else url
         }
         return contentDispositionHeader.value
-                .substringAfter(filenameMarker, "")
-                .substringBefore(';')
-                .removeSurrounding("\"")
+            .substringAfter(filenameMarker, "")
+            .substringBefore(';')
+            .removeSurrounding("\"")
     }
 
     fun listPlugins(ideBuild: String, channel: String?, pluginId: String?): List<PluginBean> {
@@ -213,17 +246,16 @@ class PluginRepositoryInstance private constructor(
         return response.plugins?.map { convertPlugin(it, response.name!!) } ?: emptyList()
     }
 
-    private fun convertPlugin(response: RestPluginBean, category: String): PluginBean {
-        return PluginBean(
-                response.name,
-                response.id,
-                response.version,
-                category,
-                response.ideaVersion.sinceBuild,
-                response.ideaVersion.untilBuild,
-                response.depends ?: emptyList()
+    private fun convertPlugin(response: RestPluginBean, category: String) =
+        PluginBean(
+            response.name,
+            response.id,
+            response.version,
+            category,
+            response.ideaVersion.sinceBuild,
+            response.ideaVersion.untilBuild,
+            response.depends ?: emptyList()
         )
-    }
 }
 
 private val LOG = LoggerFactory.getLogger("plugin-repository-rest-client")
@@ -232,30 +264,45 @@ private interface PluginRepositoryService {
     @Multipart
     @Headers("Accept: text/plain")
     @POST("/plugin/uploadPlugin")
-    fun upload(@Part("userName") username: TypedString?, @Part("password") password: TypedString?,
-               @Part("pluginId") pluginId: TypedString, @Part("channel") channel: TypedString?,
-               @Part("file") file: TypedFile): Response
+    fun upload(
+        @Part("userName") username: TypedString?,
+        @Part("password") password: TypedString?,
+        @Part("pluginId") pluginId: TypedString,
+        @Part("channel") channel: TypedString?,
+        @Part("file") file: TypedFile
+    ): Response
 
     @Multipart
     @Headers("Accept: text/plain")
     @POST("/plugin/uploadPlugin")
-    fun uploadByXmlId(@Part("userName") username: TypedString?, @Part("password") password: TypedString?,
-                      @Part("xmlId") pluginXmlId: TypedString, @Part("channel") channel: TypedString?,
-                      @Part("file") file: TypedFile): Response
-
+    fun uploadByXmlId(
+        @Part("userName") username: TypedString?,
+        @Part("password") password: TypedString?,
+        @Part("xmlId") pluginXmlId: TypedString,
+        @Part("channel") channel: TypedString?,
+        @Part("file") file: TypedFile
+    ): Response
 
     @GET("/plugin/download")
-    fun download(@Query("pluginId") pluginId: String, @Query("version") version: String,
-                 @Query("channel") channel: String?): Response
+    fun download(
+        @Query("pluginId") pluginId: String,
+        @Query("version") version: String,
+        @Query("channel") channel: String?
+    ): Response
 
     @GET("/pluginManager?action=download")
-    fun downloadCompatiblePlugin(@Query("id") pluginId: String, @Query("build") ideBuild: String,
-                                 @Query("channel") channel: String?): Response
+    fun downloadCompatiblePlugin(
+        @Query("id") pluginId: String,
+        @Query("build") ideBuild: String,
+        @Query("channel") channel: String?
+    ): Response
 
     @GET("/plugins/list/")
-    fun listPlugins(@Query("build") ideBuild: String,
-                    @Query("channel") channel: String?,
-                    @Query("pluginId") pluginId: String?): RestPluginRepositoryBean
+    fun listPlugins(
+        @Query("build") ideBuild: String,
+        @Query("channel") channel: String?,
+        @Query("pluginId") pluginId: String?
+    ): RestPluginRepositoryBean
 }
 
 
