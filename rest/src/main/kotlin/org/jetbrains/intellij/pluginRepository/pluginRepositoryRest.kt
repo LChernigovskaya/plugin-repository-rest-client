@@ -1,70 +1,23 @@
 package org.jetbrains.intellij.pluginRepository
 
+import okhttp3.ResponseBody
 import org.jetbrains.intellij.pluginRepository.exceptions.UploadFailedException
-import org.simpleframework.xml.Attribute
-import org.simpleframework.xml.Element
-import org.simpleframework.xml.ElementList
-import org.simpleframework.xml.Root
 import org.slf4j.LoggerFactory
-import retrofit.RestAdapter
-import retrofit.RetrofitError
-import retrofit.client.Request
-import retrofit.client.Response
-import retrofit.client.UrlConnectionClient
-import retrofit.converter.SimpleXMLConverter
-import retrofit.http.*
-import retrofit.mime.TypedFile
-import retrofit.mime.TypedString
+import retrofit2.Response
 import java.io.File
 import java.io.IOException
-import java.net.HttpURLConnection
-
-@Root(strict = false)
-private data class RestPluginRepositoryBean(
-    @field:ElementList(entry = "category", inline = true, required = false)
-    var categories: List<RestCategoryBean>? = null
-)
-
-@Root(strict = false)
-private data class RestCategoryBean(
-    @field:Attribute
-    var name: String? = null,
-
-    @field:ElementList(entry = "idea-plugin", inline = true)
-    var plugins: List<RestPluginBean>? = null
-)
-
-@Root(strict = false)
-private data class RestPluginBean(
-    @param:Element(name = "name") @field:Element
-    val name: String,
-
-    @param:Element(name = "id") @field:Element
-    val id: String,
-
-    @param:Element(name = "version") @field:Element
-    val version: String,
-
-    @param:Element(name = "idea-version") @field:Element(name = "idea-version")
-    val ideaVersion: RestIdeaVersionBean,
-
-    @param:ElementList(entry = "depends", inline = true, required = false)
-    @field:ElementList(entry = "depends", inline = true, required = false)
-    val depends: List<String>? = null
-)
-
-@Root(strict = false)
-private data class RestIdeaVersionBean(
-    @field:Attribute(name = "since-build", required = false) var sinceBuild: String? = null,
-    @field:Attribute(name = "until-build", required = false) var untilBuild: String? = null
-)
 
 class PluginRepositoryInstance private constructor(
-    private val siteUrl: String,
-    private val token: String?,
+    private val repositoryUrl: String,
+    authorizationToken: String?,
     username: String?,
     password: String?
 ) : PluginRepository {
+
+    companion object {
+        private val LOG = LoggerFactory.getLogger("plugin-repository-rest-client")
+    }
+
     @Deprecated("Use hub permanent tokens to authorize your requests")
     constructor(siteUrl: String, username: String?, password: String?) : this(siteUrl, null, username, password)
 
@@ -74,27 +27,7 @@ class PluginRepositoryInstance private constructor(
      */
     constructor(siteUrl: String, token: String? = null) : this(siteUrl, token, null, null)
 
-    private val username = if (username != null) TypedString(username) else null
-    private val password = if (password != null) TypedString(password) else null
-
-    private val service = RestAdapter.Builder()
-        .setEndpoint(siteUrl)
-        .setClient(object : UrlConnectionClient() {
-            override fun openConnection(request: Request?): HttpURLConnection {
-                val connection = super.openConnection(request)
-                val timeout = 10 * 60 * 1000
-                connection.readTimeout = timeout
-                return connection
-            }
-        })
-        .setRequestInterceptor { request ->
-            if (token != null) request.addHeader("Authorization", "Bearer $token")
-        }
-        .setLog { LOG.debug(it) }
-        .setLogLevel(RestAdapter.LogLevel.BASIC)
-        .setConverter(SimpleXMLConverter())
-        .build()
-        .create(PluginRepositoryService::class.java)
+    private val service = createPluginRepositoryService(repositoryUrl, authorizationToken, username, password)
 
     override fun uploadPlugin(pluginId: Int, file: File, channel: String?) {
         uploadPluginInternal(file, pluginId = pluginId, channel = channel)
@@ -104,56 +37,14 @@ class PluginRepositoryInstance private constructor(
         uploadPluginInternal(file, pluginXmlId = pluginXmlId, channel = channel)
     }
 
-    private fun uploadPluginInternal(
-        file: File,
-        pluginId: Int? = null,
-        pluginXmlId: String? = null,
-        channel: String? = null
-    ) {
-        ensureCredentialsAreSet()
-        try {
-            LOG.info("Uploading plugin ${pluginXmlId ?: pluginId} from ${file.absolutePath} to $siteUrl")
-            val response = if (pluginXmlId != null) {
-                service.uploadByXmlId(
-                    username,
-                    password,
-                    TypedString(pluginXmlId),
-                    channel?.let { TypedString(it) },
-                    TypedFile("application/octet-stream", file)
-                )
-            } else {
-                service.upload(
-                    username,
-                    password,
-                    TypedString(pluginId.toString()),
-                    channel?.let { TypedString(it) },
-                    TypedFile("application/octet-stream", file)
-                )
-            }
-            LOG.info("Done: " + response.text)
-        } catch (e: RetrofitError) {
-            //see `retrofit.RetrofitError.Kind.UNEXPECTED` doc
-            if (e.kind == RetrofitError.Kind.UNEXPECTED) throw e.cause!!
-            val message = if (e.response != null) e.response.text else e.message
-            LOG.error("Failed to upload plugin: $message")
-            throw UploadFailedException(message)
-        }
-    }
-
-    private fun ensureCredentialsAreSet() {
-        if (token != null) return
-        if (username == null) throw RuntimeException("Username must be set for uploading")
-        if (password == null) throw RuntimeException("Password must be set for uploading")
+    override fun listPlugins(ideBuild: String, channel: String?, pluginId: String?): List<PluginBean> {
+        return service.listPlugins(ideBuild, channel, pluginId)
     }
 
     override fun download(pluginXmlId: String, version: String, channel: String?, targetPath: String): File? {
         LOG.info("Downloading $pluginXmlId:$version")
-        return try {
-            downloadFile(service.download(pluginXmlId, version, channel), targetPath)
-        } catch (e: RetrofitError) {
-            processRetrofitError(e, "Cannot find $pluginXmlId:$version", "Can't download plugin")
-            null
-        }
+        val call = service.download(pluginXmlId, version, channel)
+        return downloadFile(call, File(targetPath))
     }
 
     override fun downloadCompatiblePlugin(
@@ -163,135 +54,83 @@ class PluginRepositoryInstance private constructor(
         targetPath: String
     ): File? {
         LOG.info("Downloading $pluginXmlId for $ideBuild build")
-        return try {
-            downloadFile(service.downloadCompatiblePlugin(pluginXmlId, ideBuild, channel), targetPath)
-        } catch (e: RetrofitError) {
-            processRetrofitError(e, "Cannot find $pluginXmlId compatible with $ideBuild build", "Can't download plugin")
-            null
+        val response = service.downloadCompatiblePlugin(pluginXmlId, ideBuild, channel)
+        return downloadFile(response, File(targetPath))
+    }
+
+    private fun uploadPluginInternal(
+        file: File,
+        pluginId: Int? = null,
+        pluginXmlId: String? = null,
+        channel: String? = null
+    ) {
+        LOG.info("Uploading plugin ${pluginXmlId ?: pluginId} from ${file.absolutePath} to $repositoryUrl")
+        try {
+            service.uploadPlugin(pluginId, pluginXmlId, channel, file)
+            LOG.info("Successful uploaded plugin ${pluginXmlId ?: pluginId}")
+        } catch (e: Exception) {
+            LOG.error("Failed to upload plugin ${pluginXmlId ?: pluginId}", e)
+            throw UploadFailedException(e)
         }
     }
 
-    private fun processRetrofitError(e: RetrofitError, notFoundErrorMessage: String, baseErrorMessage: String) {
-        //see `retrofit.RetrofitError.Kind.UNEXPECTED` doc
-        if (e.kind == RetrofitError.Kind.UNEXPECTED) throw e.cause!!
-        val response = e.response
-        if (response != null) {
-            if (response.status == HttpURLConnection.HTTP_NOT_FOUND) {
-                LOG.error(notFoundErrorMessage)
-            } else {
-                LOG.error("$baseErrorMessage. Response from server: ${response.status}")
-            }
-        } else {
-            LOG.error("$baseErrorMessage: ${e.message}", e)
-        }
-    }
-
-    private fun downloadFile(response: Response, targetPath: String): File? {
-        val mimeType = response.body.mimeType()
-        if (mimeType != "application/zip" && mimeType != "application/java-archive") return null
-
-        var targetFile = File(targetPath)
+    private fun downloadFile(response: Response<ResponseBody>, targetFile: File): File? {
         if (targetFile.isDirectory) {
-            val guessFileName = guessFileName(response, response.url)
+            val guessFileName = guessFileName(response) ?: return null
             if (guessFileName.contains(File.separatorChar)) {
-                throw IOException("Invalid filename returned by a server")
+                throw IOException("Invalid filename returned by a server: $guessFileName")
             }
             val file = File(targetFile, guessFileName)
             if (file.parentFile != targetFile) {
-                throw IOException("Invalid filename returned by a server")
+                throw IOException("Invalid filename returned by a server: $guessFileName")
             }
-            targetFile = file
+            if (file.isDirectory) {
+                throw IOException("Cannot save to directory: ${file.absolutePath}")
+            }
+            downloadFile(response, file)
+        }
+        if (targetFile.exists() && !targetFile.deleteRecursively()) {
+            throw RuntimeException("Target file already exists and cannot be removed: ${targetFile.absolutePath}")
         }
         if (!targetFile.createNewFile()) {
-            throw RuntimeException("Cannot create ${targetFile.absolutePath}")
+            throw RuntimeException("Cannot create target file: ${targetFile.absolutePath}")
         }
-        targetFile.outputStream().use { response.body.`in`().copyTo(it) }
+        response.body()!!.use { responseBody ->
+            val expectedSize = responseBody.contentLength()
+            copyInputStreamToFileWithProgress(responseBody.byteStream(), expectedSize, targetFile)
+        }
         LOG.info("Downloaded successfully to ${targetFile.absolutePath}")
-
         return targetFile
     }
 
-    private fun guessFileName(response: Response, url: String): String {
+    private fun guessFileName(response: Response<ResponseBody>): String? {
         val filenameMarker = "filename="
-        val contentDispositionHeader = response.headers.find { it.name.equals("Content-Disposition", true) }
-        if (contentDispositionHeader == null || !contentDispositionHeader.value.contains(filenameMarker)) {
-            val fileName = url.substringAfterLast('/')
-            return if (fileName.isNotEmpty()) fileName else url
+        val headers = response.headers()
+        val headerName = headers.names().find { it.equals("Content-Disposition", true) }
+        if (headerName != null) {
+            val headerValue = headers[headerName]!!
+            if (filenameMarker in headerValue) {
+                return headerValue
+                    .substringAfter(filenameMarker, "")
+                    .substringBefore(';')
+                    .removeSurrounding("\"")
+            }
         }
-        return contentDispositionHeader.value
-            .substringAfter(filenameMarker, "")
-            .substringBefore(';')
-            .removeSurrounding("\"")
+
+        val contentType = response.body()!!.contentType()
+        when (contentType) {
+            jarContentMediaType -> return "jar"
+            xJarContentMediaType -> return "jar"
+            zipContentMediaType -> return "zip"
+        }
+
+        val path = response.raw().request().url().encodedPath()
+        val fileName = path.substringAfterLast("/")
+        if (fileName.isNotEmpty()) {
+            return fileName
+        }
+
+        return null
     }
 
-    override fun listPlugins(ideBuild: String, channel: String?, pluginId: String?): List<PluginBean> {
-        val response = service.listPlugins(ideBuild, channel, pluginId)
-        return response.categories?.flatMap { convertCategory(it) } ?: emptyList()
-    }
-
-    private fun convertCategory(response: RestCategoryBean): List<PluginBean> {
-        return response.plugins?.map { convertPlugin(it, response.name!!) } ?: emptyList()
-    }
-
-    private fun convertPlugin(response: RestPluginBean, category: String) =
-        PluginBean(
-            response.name,
-            response.id,
-            response.version,
-            category,
-            response.ideaVersion.sinceBuild,
-            response.ideaVersion.untilBuild,
-            response.depends ?: emptyList()
-        )
 }
-
-private val LOG = LoggerFactory.getLogger("plugin-repository-rest-client")
-
-private interface PluginRepositoryService {
-    @Multipart
-    @Headers("Accept: text/plain")
-    @POST("/plugin/uploadPlugin")
-    fun upload(
-        @Part("userName") username: TypedString?,
-        @Part("password") password: TypedString?,
-        @Part("pluginId") pluginId: TypedString,
-        @Part("channel") channel: TypedString?,
-        @Part("file") file: TypedFile
-    ): Response
-
-    @Multipart
-    @Headers("Accept: text/plain")
-    @POST("/plugin/uploadPlugin")
-    fun uploadByXmlId(
-        @Part("userName") username: TypedString?,
-        @Part("password") password: TypedString?,
-        @Part("xmlId") pluginXmlId: TypedString,
-        @Part("channel") channel: TypedString?,
-        @Part("file") file: TypedFile
-    ): Response
-
-    @GET("/plugin/download")
-    fun download(
-        @Query("pluginId") pluginId: String,
-        @Query("version") version: String,
-        @Query("channel") channel: String?
-    ): Response
-
-    @GET("/pluginManager?action=download")
-    fun downloadCompatiblePlugin(
-        @Query("id") pluginId: String,
-        @Query("build") ideBuild: String,
-        @Query("channel") channel: String?
-    ): Response
-
-    @GET("/plugins/list/")
-    fun listPlugins(
-        @Query("build") ideBuild: String,
-        @Query("channel") channel: String?,
-        @Query("pluginId") pluginId: String?
-    ): RestPluginRepositoryBean
-}
-
-
-val Response.text
-    get() = this.body.`in`().reader().readText()
